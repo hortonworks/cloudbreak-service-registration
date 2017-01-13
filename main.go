@@ -17,8 +17,6 @@ const (
 	DEFAULT_AMBARI_CREDENTIALS_PATH = "/srv/pillar/ambari/credentials.sls"
 	DEFAULT_AMBARI_SERVER_PATH      = "/srv/pillar/ambari/server.sls"
 	SLEEP_TIME                      = 5
-	AMBARI_REQUEST_BY_HEADER        = "X-Requested-By"
-	AMBARI_API_URL                  = "/api/v1"
 )
 
 type Ambari struct {
@@ -37,6 +35,15 @@ type ClusterResponse struct {
 	} `json:"items"`
 }
 
+type HostsResponse struct {
+	Items []struct {
+		Host struct {
+			HostName string `json:"host_name"`
+			IP       string `json:"ip"`
+		} `json:"Hosts"`
+	} `json:"items"`
+}
+
 func main() {
 	credentialsPath := os.Getenv(ENV_AMBARI_CREDENTIALS_PATH)
 	if len(credentialsPath) == 0 {
@@ -50,7 +57,13 @@ func main() {
 	waitFile(serverPath)
 	ambari := readCredentials(credentialsPath)
 	ambari.Config.Address = readServer(serverPath).Config.Address
-	waitForCluster(ambari)
+
+	httpClient := &http.Client{}
+	waitForCluster(httpClient, ambari)
+	getHosts(httpClient, ambari)
+	//https://52.214.137.88/ambari/api/v1/hosts?fields=Hosts/ip
+	//https://52.214.137.88/ambari/api/v1/services/?fields=components/hostComponents/RootServiceHostComponents/service_name/*
+	//https://52.214.137.88/ambari/api/v1/clusters/krisz-test/hosts?fields=host_components/HostRoles/state/*
 }
 
 func waitFile(path string) {
@@ -108,14 +121,18 @@ func readServer(path string) *Ambari {
 	return ambari
 }
 
-func waitForCluster(ambari *Ambari) string {
-	req, _ := http.NewRequest("GET", "http://"+ambari.Config.Address+":8080"+AMBARI_API_URL+"/clusters", nil)
-	req.Header.Add(AMBARI_REQUEST_BY_HEADER, "ambari")
+func createGETRequest(ambari *Ambari, path string) *http.Request {
+	req, _ := http.NewRequest("GET", "http://"+ambari.Config.Address+":8080/api/v1"+path, nil)
+	req.Header.Add("X-Requested-By", "ambari")
 	req.SetBasicAuth(ambari.Config.Username, ambari.Config.Password)
-	httpClient := &http.Client{}
+	return req
+}
+
+func waitForCluster(client *http.Client, ambari *Ambari) string {
+	req := createGETRequest(ambari, "/clusters")
 	var clusterName string
 	for len(clusterName) == 0 {
-		resp, err := httpClient.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			log.Println(err)
 			continue
@@ -124,11 +141,41 @@ func waitForCluster(ambari *Ambari) string {
 		log.Println("Clusters resonse: " + string(body))
 		var cresp ClusterResponse
 		decoder := json.NewDecoder(strings.NewReader(string(body)))
-		decoder.Decode(&cresp)
+		if err = decoder.Decode(&cresp); err != nil {
+			log.Println(err)
+			continue
+		}
 		if len(cresp.Items[0].Cluster.Name) > 0 {
 			clusterName = cresp.Items[0].Cluster.Name
 		}
 	}
 	log.Println("Found cluster: " + clusterName)
 	return clusterName
+}
+
+func getHosts(client *http.Client, ambari *Ambari) map[string]string {
+	req := createGETRequest(ambari, "/hosts?fields=Hosts/ip")
+	var hosts = make(map[string]string)
+	for len(hosts) == 0 {
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		body, _ := ioutil.ReadAll(resp.Body)
+		log.Println("Hosts resonse: " + string(body))
+		var hresp HostsResponse
+		decoder := json.NewDecoder(strings.NewReader(string(body)))
+		if err = decoder.Decode(&hresp); err != nil {
+			log.Println(err)
+			continue
+		}
+		if len(hresp.Items) > 0 {
+			for _, item := range hresp.Items {
+				hosts[item.Host.HostName] = item.Host.IP
+			}
+			log.Printf("Found hosts: %v", hosts)
+		}
+	}
+	return hosts
 }
