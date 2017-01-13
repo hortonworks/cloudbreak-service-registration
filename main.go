@@ -44,6 +44,28 @@ type HostsResponse struct {
 	} `json:"items"`
 }
 
+type HostComponentsResponse struct {
+	Items []struct {
+		Host struct {
+			HostName string `json:"host_name"`
+		} `json:"Hosts"`
+		HostComponents []struct {
+			HostRole struct {
+				ComponentName string `json:"component_name"`
+				Hostname      string `json:"host_name"`
+				State         string `json:"state"`
+			} `json:"HostRoles"`
+		} `json:"host_components"`
+	} `json:"items"`
+}
+
+type HostComponent struct {
+	Hostname      string
+	IP            string
+	HostComponent string
+	State         string
+}
+
 func main() {
 	credentialsPath := os.Getenv(ENV_AMBARI_CREDENTIALS_PATH)
 	if len(credentialsPath) == 0 {
@@ -59,11 +81,10 @@ func main() {
 	ambari.Config.Address = readServer(serverPath).Config.Address
 
 	httpClient := &http.Client{}
-	waitForCluster(httpClient, ambari)
-	getHosts(httpClient, ambari)
-	//https://52.214.137.88/ambari/api/v1/hosts?fields=Hosts/ip
+	clusterName := waitForCluster(httpClient, ambari)
+	hosts := getHosts(httpClient, ambari)
+	getHostComponents(httpClient, ambari, clusterName, hosts)
 	//https://52.214.137.88/ambari/api/v1/services/?fields=components/hostComponents/RootServiceHostComponents/service_name/*
-	//https://52.214.137.88/ambari/api/v1/clusters/krisz-test/hosts?fields=host_components/HostRoles/state/*
 }
 
 func waitFile(path string) {
@@ -178,4 +199,40 @@ func getHosts(client *http.Client, ambari *Ambari) map[string]string {
 		}
 	}
 	return hosts
+}
+
+func getHostComponents(client *http.Client, ambari *Ambari, clusterName string, hosts map[string]string) []HostComponent {
+	req := createGETRequest(ambari, "/clusters/"+clusterName+"/hosts?fields=host_components/HostRoles/state/*")
+	var hostComponents = make([]HostComponent, 0)
+	for len(hostComponents) == 0 {
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		body, _ := ioutil.ReadAll(resp.Body)
+		log.Println("Host component resonse: " + string(body))
+		var hresp HostComponentsResponse
+		decoder := json.NewDecoder(strings.NewReader(string(body)))
+		if err = decoder.Decode(&hresp); err != nil {
+			log.Println(err)
+		}
+		log.Printf("Found host components: %v", hresp)
+		if len(hresp.Items) > 0 {
+			for _, item := range hresp.Items {
+				ip := hosts[item.Host.HostName]
+				for _, component := range item.HostComponents {
+					hc := HostComponent{
+						HostComponent: component.HostRole.ComponentName,
+						Hostname:      item.Host.HostName,
+						IP:            ip,
+						State:         component.HostRole.State,
+					}
+					hostComponents = append(hostComponents, hc)
+				}
+			}
+		}
+	}
+	log.Printf("Generated host components: %v", hostComponents)
+	return hostComponents
 }
