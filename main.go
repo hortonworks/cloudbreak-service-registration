@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"gopkg.in/yaml.v2"
 	"io/ioutil"
@@ -16,7 +17,7 @@ const (
 	ENV_AMBARI_SERVER_PATH          = "AMBARI_SERVER_PATH"
 	DEFAULT_AMBARI_CREDENTIALS_PATH = "/srv/pillar/ambari/credentials.sls"
 	DEFAULT_AMBARI_SERVER_PATH      = "/srv/pillar/ambari/server.sls"
-	SLEEP_TIME                      = 5
+	REQUEST_SLEEP_TIME              = 5 * time.Second
 )
 
 type Ambari struct {
@@ -66,25 +67,47 @@ type HostComponent struct {
 	State         string
 }
 
+type ConsulService struct {
+	ID      string `json:"ID"`
+	Name    string `json:"Name"`
+	Address string `json:"Address"`
+	Port    int64  `json:"Port"`
+}
+
+func (c *ConsulService) Json() string {
+	j, _ := json.Marshal(c)
+	return string(j)
+}
+
 func main() {
+	ambari := createAmbariConfig()
+	httpClient := &http.Client{}
+
+	clusterName := getClusterName(httpClient, ambari)
+	hosts := getHosts(httpClient, ambari)
+	components := getHostComponents(httpClient, ambari, clusterName, hosts)
+	//https://52.214.137.88/ambari/api/v1/services/?fields=components/hostComponents/RootServiceHostComponents/service_name/*
+
+	registerToConsul(httpClient, components)
+}
+
+func createAmbariConfig() *Ambari {
 	credentialsPath := os.Getenv(ENV_AMBARI_CREDENTIALS_PATH)
 	if len(credentialsPath) == 0 {
 		credentialsPath = DEFAULT_AMBARI_CREDENTIALS_PATH
 	}
+	log.Print("Ambari credentials path: " + credentialsPath)
+	waitFile(credentialsPath)
+	ambari := readCredentials(credentialsPath)
+
 	serverPath := os.Getenv(ENV_AMBARI_SERVER_PATH)
 	if len(serverPath) == 0 {
-		credentialsPath = DEFAULT_AMBARI_SERVER_PATH
+		serverPath = DEFAULT_AMBARI_SERVER_PATH
 	}
-	waitFile(credentialsPath)
+	log.Print("Ambari server path: " + serverPath)
 	waitFile(serverPath)
-	ambari := readCredentials(credentialsPath)
 	ambari.Config.Address = readServer(serverPath).Config.Address
-
-	httpClient := &http.Client{}
-	clusterName := waitForCluster(httpClient, ambari)
-	hosts := getHosts(httpClient, ambari)
-	getHostComponents(httpClient, ambari, clusterName, hosts)
-	//https://52.214.137.88/ambari/api/v1/services/?fields=components/hostComponents/RootServiceHostComponents/service_name/*
+	return ambari
 }
 
 func waitFile(path string) {
@@ -92,7 +115,7 @@ func waitFile(path string) {
 	for !found {
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			log.Println("File not found at location: " + path)
-			time.Sleep(SLEEP_TIME * time.Second)
+			time.Sleep(REQUEST_SLEEP_TIME)
 		} else {
 			log.Println("Found file at location: " + path)
 			found = true
@@ -104,6 +127,7 @@ func readCredentials(path string) *Ambari {
 	var ambari *Ambari = nil
 	for ambari == nil {
 		content, _ := ioutil.ReadFile(path)
+		log.Println("Read file, content: " + string(content))
 		var temp Ambari
 		err := yaml.Unmarshal(content, &temp)
 		if err != nil {
@@ -115,7 +139,7 @@ func readCredentials(path string) *Ambari {
 			log.Println("Ambari credentials found")
 		} else {
 			log.Println("Ambari credentials are empty, waiting..")
-			time.Sleep(SLEEP_TIME * time.Second)
+			time.Sleep(REQUEST_SLEEP_TIME)
 		}
 	}
 	return ambari
@@ -125,6 +149,7 @@ func readServer(path string) *Ambari {
 	var ambari *Ambari = nil
 	for ambari == nil {
 		content, _ := ioutil.ReadFile(path)
+		log.Println("Read file, content: " + string(content))
 		var temp Ambari
 		err := yaml.Unmarshal(content, &temp)
 		if err != nil {
@@ -136,7 +161,7 @@ func readServer(path string) *Ambari {
 			log.Println("Ambari server found")
 		} else {
 			log.Println("Ambari server is empty waiting..")
-			time.Sleep(SLEEP_TIME * time.Second)
+			time.Sleep(REQUEST_SLEEP_TIME)
 		}
 	}
 	return ambari
@@ -149,7 +174,7 @@ func createGETRequest(ambari *Ambari, path string) *http.Request {
 	return req
 }
 
-func waitForCluster(client *http.Client, ambari *Ambari) string {
+func getClusterName(client *http.Client, ambari *Ambari) string {
 	req := createGETRequest(ambari, "/clusters")
 	var clusterName string
 	for len(clusterName) == 0 {
@@ -166,8 +191,11 @@ func waitForCluster(client *http.Client, ambari *Ambari) string {
 			log.Println(err)
 			continue
 		}
-		if len(cresp.Items[0].Cluster.Name) > 0 {
+		if len(cresp.Items) > 0 && len(cresp.Items[0].Cluster.Name) > 0 {
 			clusterName = cresp.Items[0].Cluster.Name
+		} else {
+			log.Println("Cluster not found, yet, waiting..")
+			time.Sleep(REQUEST_SLEEP_TIME)
 		}
 	}
 	log.Println("Found cluster: " + clusterName)
@@ -196,6 +224,9 @@ func getHosts(client *http.Client, ambari *Ambari) map[string]string {
 				hosts[item.Host.HostName] = item.Host.IP
 			}
 			log.Printf("Found hosts: %v", hosts)
+		} else {
+			log.Println("There are not hosts yet, waiting..")
+			time.Sleep(REQUEST_SLEEP_TIME)
 		}
 	}
 	return hosts
@@ -231,8 +262,38 @@ func getHostComponents(client *http.Client, ambari *Ambari, clusterName string, 
 					hostComponents = append(hostComponents, hc)
 				}
 			}
+		} else {
+			log.Println("No host components found yet, waiting..")
+			time.Sleep(REQUEST_SLEEP_TIME)
 		}
 	}
 	log.Printf("Generated host components: %v", hostComponents)
 	return hostComponents
+}
+
+func registerToConsul(client *http.Client, components []HostComponent) {
+	for _, comp := range components {
+		componentName := strings.ToLower(comp.HostComponent)
+		shortHostname := comp.Hostname[0:strings.Index(comp.Hostname, ".")]
+		id := strings.Replace(componentName, "_", "-", -1) + "." + strings.Replace(shortHostname, "_", "-", 1)
+		service := ConsulService{
+			ID:      id,
+			Name:    componentName,
+			Address: comp.IP,
+			Port:    1080,
+		}
+		body := service.Json()
+		log.Printf("Registering service: %v", body)
+		req, _ := http.NewRequest("PUT", "http://"+comp.IP+":8500/v1/agent/service/register", bytes.NewBuffer([]byte(body)))
+		req.Header.Add("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		respBody, _ := ioutil.ReadAll(resp.Body)
+		if len(respBody) > 0 {
+			log.Println("Invalid register request: " + string(respBody))
+		}
+	}
 }
