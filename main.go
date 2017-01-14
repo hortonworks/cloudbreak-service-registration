@@ -70,10 +70,11 @@ type HostComponent struct {
 }
 
 type ConsulService struct {
-	ID      string `json:"ID"`
-	Name    string `json:"Name"`
-	Address string `json:"Address"`
-	Port    int64  `json:"Port"`
+	ID          string `json:"ID"`
+	Name        string `json:"Name,omitempty"`
+	Address     string `json:"Address"`
+	Port        int64  `json:"Port"`
+	ServiceName string `json:"ServiceName,omitempty"`
 }
 
 func (c *ConsulService) Json() string {
@@ -90,9 +91,11 @@ func main() {
 	for {
 		hosts := getHosts(httpClient, ambari)
 		components := getHostComponents(httpClient, ambari, clusterName, hosts)
-		//https://52.214.137.88/ambari/api/v1/services/?fields=components/hostComponents/RootServiceHostComponents/service_name/*
 
-		registerToConsul(httpClient, components)
+		consulServices := getConsulServices(httpClient)
+		if newComponents := getNewComponents(components, consulServices); len(newComponents) > 0 {
+			registerToConsul(httpClient, newComponents)
+		}
 
 		wait()
 	}
@@ -289,6 +292,66 @@ func getHostComponents(client *http.Client, ambari *Ambari, clusterName string, 
 	}
 	log.Printf("Generated host components: %v", hostComponents)
 	return hostComponents
+}
+
+func getConsulServices(client *http.Client) []ConsulService {
+	var registered = make([]ConsulService, 0)
+
+	req, _ := http.NewRequest("GET", "http://localhost:8500/v1/catalog/services", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Println(err)
+		return registered
+	}
+	respBody, _ := ioutil.ReadAll(resp.Body)
+	log.Println("Already registered Consul services: " + string(respBody))
+	var services = make(map[string]interface{})
+	decoder := json.NewDecoder(strings.NewReader(string(respBody)))
+	if err = decoder.Decode(&services); err != nil {
+		log.Println(err)
+		return registered
+	}
+
+	for service := range services {
+		log.Println("Get service registrations for: " + service)
+		req, _ := http.NewRequest("GET", "http://localhost:8500/v1/catalog/service/"+service, nil)
+		srvResp, err := client.Do(req)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		respBody, _ := ioutil.ReadAll(srvResp.Body)
+		var services []ConsulService
+		decoder := json.NewDecoder(strings.NewReader(string(respBody)))
+		if err = decoder.Decode(&services); err != nil {
+			log.Println(err)
+			continue
+		}
+		log.Printf("Retrieved service info: %v", services)
+		for _, s := range services {
+			registered = append(registered, s)
+		}
+	}
+
+	return registered
+}
+
+func getNewComponents(components []HostComponent, consulServices []ConsulService) []HostComponent {
+	var newComponents = make([]HostComponent, 0)
+	for _, component := range components {
+		registered := false
+		for _, service := range consulServices {
+			if service.ServiceName == strings.ToLower(component.HostComponent) && service.Address == component.IP {
+				log.Printf("Service '%s' is already registered for host: %s", service.ServiceName, component.IP)
+				registered = true
+				break
+			}
+		}
+		if !registered {
+			newComponents = append(newComponents, component)
+		}
+	}
+	return newComponents
 }
 
 func registerToConsul(client *http.Client, components []HostComponent) {
