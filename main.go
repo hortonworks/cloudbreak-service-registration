@@ -13,11 +13,13 @@ import (
 )
 
 const (
-	ENV_AMBARI_CREDENTIALS_PATH     = "AMBARI_CREDENTIALS_PATH"
-	ENV_AMBARI_SERVER_PATH          = "AMBARI_SERVER_PATH"
-	DEFAULT_AMBARI_CREDENTIALS_PATH = "/srv/pillar/ambari/credentials.sls"
-	DEFAULT_AMBARI_SERVER_PATH      = "/srv/pillar/ambari/server.sls"
-	REQUEST_SLEEP_TIME              = 5 * time.Second
+	ENV_AMBARI_CREDENTIALS_PATH         = "AMBARI_CREDENTIALS_PATH"
+	ENV_AMBARI_SERVER_PATH              = "AMBARI_SERVER_PATH"
+	ENV_SERVICE_CHECK_POLL_INTERVAL     = "SERVICE_CHECK_POLL_INTERVAL"
+	DEFAULT_AMBARI_CREDENTIALS_PATH     = "/srv/pillar/ambari/credentials.sls"
+	DEFAULT_AMBARI_SERVER_PATH          = "/srv/pillar/ambari/server.sls"
+	DEFAULT_SERVICE_CHECK_POLL_INTERVAL = 10 * time.Second
+	REQUEST_SLEEP_TIME                  = 5 * time.Second
 )
 
 type Ambari struct {
@@ -84,11 +86,29 @@ func main() {
 	httpClient := &http.Client{}
 
 	clusterName := getClusterName(httpClient, ambari)
-	hosts := getHosts(httpClient, ambari)
-	components := getHostComponents(httpClient, ambari, clusterName, hosts)
-	//https://52.214.137.88/ambari/api/v1/services/?fields=components/hostComponents/RootServiceHostComponents/service_name/*
 
-	registerToConsul(httpClient, components)
+	for {
+		hosts := getHosts(httpClient, ambari)
+		components := getHostComponents(httpClient, ambari, clusterName, hosts)
+		//https://52.214.137.88/ambari/api/v1/services/?fields=components/hostComponents/RootServiceHostComponents/service_name/*
+
+		registerToConsul(httpClient, components)
+
+		wait()
+	}
+}
+
+func wait() {
+	var sleep time.Duration
+	sleepEnv := os.Getenv(ENV_SERVICE_CHECK_POLL_INTERVAL)
+	if len(sleepEnv) > 0 {
+		s, _ := time.ParseDuration(sleepEnv)
+		sleep = s
+	} else {
+		sleep = DEFAULT_SERVICE_CHECK_POLL_INTERVAL
+	}
+	log.Printf("Sleep for %.0f seconds", sleep.Seconds())
+	time.Sleep(sleep)
 }
 
 func createAmbariConfig() *Ambari {
