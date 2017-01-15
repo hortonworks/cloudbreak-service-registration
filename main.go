@@ -75,6 +75,7 @@ type ConsulService struct {
 	Address     string `json:"Address"`
 	Port        int64  `json:"Port"`
 	ServiceName string `json:"ServiceName,omitempty"`
+	ServiceID   string `json:"ServiceID,omitempty"`
 }
 
 func (c *ConsulService) Json() string {
@@ -91,10 +92,14 @@ func main() {
 	for {
 		hosts := getHosts(httpClient, ambari)
 		components := getHostComponents(httpClient, ambari, clusterName, hosts)
-
 		consulServices := getConsulServices(httpClient)
+
 		if newComponents := getNewComponents(components, consulServices); len(newComponents) > 0 {
 			registerToConsul(httpClient, newComponents)
+		}
+
+		if removedServices := getRemovedServices(components, consulServices); len(removedServices) > 0 {
+			deregisterFromConsul(httpClient, removedServices)
 		}
 
 		wait()
@@ -354,6 +359,23 @@ func getNewComponents(components []HostComponent, consulServices []ConsulService
 	return newComponents
 }
 
+func getRemovedServices(components []HostComponent, consulServices []ConsulService) []ConsulService {
+	var removedServices = make([]ConsulService, 0)
+	for _, service := range consulServices {
+		active := false
+		for _, component := range components {
+			if service.ServiceName == strings.ToLower(component.HostComponent) && service.Address == component.IP {
+				active = true
+				break
+			}
+		}
+		if !active {
+			removedServices = append(removedServices, service)
+		}
+	}
+	return removedServices
+}
+
 func registerToConsul(client *http.Client, components []HostComponent) {
 	for _, comp := range components {
 		componentName := strings.ToLower(comp.HostComponent)
@@ -377,6 +399,24 @@ func registerToConsul(client *http.Client, components []HostComponent) {
 		respBody, _ := ioutil.ReadAll(resp.Body)
 		if len(respBody) > 0 {
 			log.Println("Invalid register request: " + string(respBody))
+		}
+	}
+}
+
+func deregisterFromConsul(client *http.Client, services []ConsulService) {
+	for _, service := range services {
+		if service.ServiceName != "consul" && service.ServiceName != "node-exporter" {
+			log.Printf("Deregistering service: %s", service.ServiceID)
+			req, _ := http.NewRequest("GET", "http://"+service.Address+":8500/v1/agent/service/deregister/"+service.ServiceID, nil)
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+			respBody, _ := ioutil.ReadAll(resp.Body)
+			if len(respBody) > 0 {
+				log.Println("Invalid deregister request: " + string(respBody))
+			}
 		}
 	}
 }
