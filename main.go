@@ -70,12 +70,14 @@ type HostComponent struct {
 }
 
 type ConsulService struct {
-	ID          string `json:"ID"`
-	Name        string `json:"Name,omitempty"`
-	Address     string `json:"Address"`
-	Port        int64  `json:"Port"`
-	ServiceName string `json:"ServiceName,omitempty"`
-	ServiceID   string `json:"ServiceID,omitempty"`
+	ID          string   `json:"ID"`
+	Name        string   `json:"Name,omitempty"`
+	Address     string   `json:"Address"`
+	Port        int64    `json:"Port"`
+	Tags        []string `json:"Tags"`
+	ServiceName string   `json:"ServiceName,omitempty"`
+	ServiceID   string   `json:"ServiceID,omitempty"`
+	ServiceTags []string `json:"ServiceTags,omitempty"`
 }
 
 func (c *ConsulService) Json() string {
@@ -346,8 +348,9 @@ func getNewComponents(components []HostComponent, consulServices []ConsulService
 	for _, component := range components {
 		registered := false
 		for _, service := range consulServices {
-			if service.ServiceName == strings.ToLower(component.HostComponent) && service.Address == component.IP {
-				log.Printf("Service '%s' is already registered for host: %s", service.ServiceName, component.IP)
+			if service.ServiceName == strings.ToLower(component.HostComponent) && service.Address == component.IP &&
+				(len(service.ServiceTags) > 0 && service.ServiceTags[0] == component.State) {
+				log.Printf("Service '%s' is already registered for host: %s and in state: %s", service.ServiceName, component.IP, service.ServiceTags[0])
 				registered = true
 				break
 			}
@@ -386,6 +389,7 @@ func registerToConsul(client *http.Client, components []HostComponent) {
 			Name:    componentName,
 			Address: comp.IP,
 			Port:    1080,
+			Tags:    []string{comp.State},
 		}
 		body := service.Json()
 		log.Printf("Registering service: %v", body)
