@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"gopkg.in/yaml.v2"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -20,6 +22,12 @@ const (
 	DEFAULT_AMBARI_SERVER_PATH          = "/srv/pillar/ambari/server.sls"
 	DEFAULT_SERVICE_CHECK_POLL_INTERVAL = 10 * time.Second
 	REQUEST_SLEEP_TIME                  = 5 * time.Second
+)
+
+var (
+	Version   string
+	BuildTime string
+	App       string
 )
 
 type Ambari struct {
@@ -86,6 +94,11 @@ func (c *ConsulService) Json() string {
 }
 
 func main() {
+	if len(os.Args) > 1 && strings.HasSuffix(os.Args[1], "version") {
+		fmt.Println("Version: " + Version + "-" + BuildTime)
+		return
+	}
+
 	ambari := createAmbariConfig()
 	httpClient := &http.Client{}
 
@@ -120,6 +133,17 @@ func main() {
 	}
 }
 
+func setLogFile() {
+	// TODO log rotation
+	logFilePath := "/var/log/" + App + ".log"
+	logFile, err := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0666)
+	if err != nil {
+		log.Printf("Error opening log file: %v", err)
+	}
+	log.Println("Log file: " + logFilePath)
+	log.SetOutput(io.MultiWriter(os.Stdout, logFile))
+}
+
 func wait() {
 	var sleep time.Duration
 	sleepEnv := os.Getenv(ENV_SERVICE_CHECK_POLL_INTERVAL)
@@ -129,7 +153,7 @@ func wait() {
 	} else {
 		sleep = DEFAULT_SERVICE_CHECK_POLL_INTERVAL
 	}
-	log.Printf("Sleep for %.0f seconds", sleep.Seconds())
+	log.Printf("Wait %.0f seconds for the next service check", sleep.Seconds())
 	time.Sleep(sleep)
 }
 
@@ -169,7 +193,6 @@ func readCredentials(path string) *Ambari {
 	var ambari *Ambari = nil
 	for ambari == nil {
 		content, _ := ioutil.ReadFile(path)
-		log.Println("Read file, content: " + string(content))
 		var temp Ambari
 		err := yaml.Unmarshal(content, &temp)
 		if err != nil {
@@ -191,7 +214,6 @@ func readServer(path string) *Ambari {
 	var ambari *Ambari = nil
 	for ambari == nil {
 		content, _ := ioutil.ReadFile(path)
-		log.Println("Read file, content: " + string(content))
 		var temp Ambari
 		err := yaml.Unmarshal(content, &temp)
 		if err != nil {
