@@ -223,6 +223,7 @@ func getClusterName(client *http.Client, ambari *Ambari) string {
 		resp, err := client.Do(req)
 		if err != nil {
 			log.Println(err)
+			time.Sleep(REQUEST_SLEEP_TIME)
 			continue
 		}
 		body, _ := ioutil.ReadAll(resp.Body)
@@ -231,6 +232,7 @@ func getClusterName(client *http.Client, ambari *Ambari) string {
 		decoder := json.NewDecoder(strings.NewReader(string(body)))
 		if err = decoder.Decode(&cresp); err != nil {
 			log.Println(err)
+			time.Sleep(REQUEST_SLEEP_TIME)
 			continue
 		}
 		if len(cresp.Items) > 0 && len(cresp.Items[0].Cluster.Name) > 0 {
@@ -345,17 +347,23 @@ func getConsulServices(client *http.Client) ([]ConsulService, error) {
 func getNewComponents(components []HostComponent, consulServices []ConsulService) []HostComponent {
 	var newComponents = make([]HostComponent, 0)
 	for _, component := range components {
-		registered := false
-		for _, service := range consulServices {
-			if service.ServiceName == strings.ToLower(component.HostComponent) && service.Address == component.IP &&
-				(len(service.ServiceTags) > 0 && service.ServiceTags[0] == component.State) {
-				log.Printf("Service '%s' is already registered for host: %s and in state: %s", service.ServiceName, component.IP, service.ServiceTags[0])
-				registered = true
-				break
+		state := strings.ToLower(component.State)
+		componentName := strings.ToLower(component.HostComponent)
+		if "unknown" != state {
+			registered := false
+			for _, service := range consulServices {
+				if service.ServiceName == componentName && service.Address == component.IP &&
+					(len(service.ServiceTags) > 0 && service.ServiceTags[0] == state) {
+					log.Printf("Service '%s' is already registered for host: %s and in state: %s", service.ServiceName, component.IP, service.ServiceTags[0])
+					registered = true
+					break
+				}
 			}
-		}
-		if !registered {
-			newComponents = append(newComponents, component)
+			if !registered {
+				newComponents = append(newComponents, component)
+			}
+		} else {
+			log.Printf("%s's state is unknown, update skipped", componentName)
 		}
 	}
 	return newComponents
@@ -388,7 +396,7 @@ func registerToConsul(client *http.Client, components []HostComponent) {
 			Name:    componentName,
 			Address: comp.IP,
 			Port:    1080,
-			Tags:    []string{comp.State},
+			Tags:    []string{strings.ToLower(comp.State)},
 		}
 		body := service.Json()
 		log.Printf("Registering service: %v", body)
