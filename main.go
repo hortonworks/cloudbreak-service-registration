@@ -92,9 +92,23 @@ func main() {
 	clusterName := getClusterName(httpClient, ambari)
 
 	for {
-		hosts := getHosts(httpClient, ambari)
-		components := getHostComponents(httpClient, ambari, clusterName, hosts)
-		consulServices := getConsulServices(httpClient)
+		wait()
+
+		hosts, err := getHosts(httpClient, ambari)
+		if err != nil {
+			log.Println("Failed to get the host list from Ambari: " + err.Error())
+			continue
+		}
+		components, err := getHostComponents(httpClient, ambari, clusterName, hosts)
+		if err != nil {
+			log.Println("Failed to get the host components from Ambari: " + err.Error())
+			continue
+		}
+		consulServices, err := getConsulServices(httpClient)
+		if err != nil {
+			log.Println("Failed to get the services from consul: " + err.Error())
+			continue
+		}
 
 		if newComponents := getNewComponents(components, consulServices); len(newComponents) > 0 {
 			registerToConsul(httpClient, newComponents)
@@ -103,8 +117,6 @@ func main() {
 		if removedServices := getRemovedServices(components, consulServices); len(removedServices) > 0 {
 			deregisterFromConsul(httpClient, removedServices)
 		}
-
-		wait()
 	}
 }
 
@@ -223,100 +235,89 @@ func getClusterName(client *http.Client, ambari *Ambari) string {
 		}
 		if len(cresp.Items) > 0 && len(cresp.Items[0].Cluster.Name) > 0 {
 			clusterName = cresp.Items[0].Cluster.Name
+			log.Println("Found cluster: " + clusterName)
 		} else {
 			log.Println("Cluster not found, yet, waiting..")
 			time.Sleep(REQUEST_SLEEP_TIME)
 		}
 	}
-	log.Println("Found cluster: " + clusterName)
 	return clusterName
 }
 
-func getHosts(client *http.Client, ambari *Ambari) map[string]string {
+func getHosts(client *http.Client, ambari *Ambari) (map[string]string, error) {
 	req := createGETRequest(ambari, "/hosts?fields=Hosts/ip")
 	var hosts = make(map[string]string)
-	for len(hosts) == 0 {
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		body, _ := ioutil.ReadAll(resp.Body)
-		log.Println("Hosts resonse: " + string(body))
-		var hresp HostsResponse
-		decoder := json.NewDecoder(strings.NewReader(string(body)))
-		if err = decoder.Decode(&hresp); err != nil {
-			log.Println(err)
-			continue
-		}
-		if len(hresp.Items) > 0 {
-			for _, item := range hresp.Items {
-				hosts[item.Host.HostName] = item.Host.IP
-			}
-			log.Printf("Found hosts: %v", hosts)
-		} else {
-			log.Println("There are not hosts yet, waiting..")
-			time.Sleep(REQUEST_SLEEP_TIME)
-		}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
 	}
-	return hosts
+	body, _ := ioutil.ReadAll(resp.Body)
+	log.Println("Hosts resonse: " + string(body))
+	var hresp HostsResponse
+	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	if err = decoder.Decode(&hresp); err != nil {
+		return nil, err
+	}
+	if len(hresp.Items) > 0 {
+		for _, item := range hresp.Items {
+			hosts[item.Host.HostName] = item.Host.IP
+		}
+		log.Printf("Found hosts: %v", hosts)
+	} else {
+		log.Println("There are not hosts yet")
+	}
+	return hosts, nil
 }
 
-func getHostComponents(client *http.Client, ambari *Ambari, clusterName string, hosts map[string]string) []HostComponent {
+func getHostComponents(client *http.Client, ambari *Ambari, clusterName string, hosts map[string]string) ([]HostComponent, error) {
 	req := createGETRequest(ambari, "/clusters/"+clusterName+"/hosts?fields=host_components/HostRoles/state/*")
 	var hostComponents = make([]HostComponent, 0)
-	for len(hostComponents) == 0 {
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		body, _ := ioutil.ReadAll(resp.Body)
-		log.Println("Host component resonse: " + string(body))
-		var hresp HostComponentsResponse
-		decoder := json.NewDecoder(strings.NewReader(string(body)))
-		if err = decoder.Decode(&hresp); err != nil {
-			log.Println(err)
-		}
-		log.Printf("Found host components: %v", hresp)
-		if len(hresp.Items) > 0 {
-			for _, item := range hresp.Items {
-				ip := hosts[item.Host.HostName]
-				for _, component := range item.HostComponents {
-					hc := HostComponent{
-						HostComponent: component.HostRole.ComponentName,
-						Hostname:      item.Host.HostName,
-						IP:            ip,
-						State:         component.HostRole.State,
-					}
-					hostComponents = append(hostComponents, hc)
-				}
-			}
-		} else {
-			log.Println("No host components found yet, waiting..")
-			time.Sleep(REQUEST_SLEEP_TIME)
-		}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
 	}
-	log.Printf("Generated host components: %v", hostComponents)
-	return hostComponents
+	body, _ := ioutil.ReadAll(resp.Body)
+	log.Println("Host component resonse: " + string(body))
+	var hresp HostComponentsResponse
+	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	if err = decoder.Decode(&hresp); err != nil {
+		return nil, err
+	}
+	log.Printf("Found host components: %v", hresp)
+	if len(hresp.Items) > 0 {
+		for _, item := range hresp.Items {
+			ip := hosts[item.Host.HostName]
+			for _, component := range item.HostComponents {
+				hc := HostComponent{
+					HostComponent: component.HostRole.ComponentName,
+					Hostname:      item.Host.HostName,
+					IP:            ip,
+					State:         component.HostRole.State,
+				}
+				hostComponents = append(hostComponents, hc)
+			}
+		}
+		log.Printf("Generated host components: %v", hostComponents)
+	} else {
+		log.Println("No host components found yet")
+	}
+	return hostComponents, nil
 }
 
-func getConsulServices(client *http.Client) []ConsulService {
+func getConsulServices(client *http.Client) ([]ConsulService, error) {
 	var registered = make([]ConsulService, 0)
 
 	req, _ := http.NewRequest("GET", "http://localhost:8500/v1/catalog/services", nil)
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Println(err)
-		return registered
+		return nil, err
 	}
 	respBody, _ := ioutil.ReadAll(resp.Body)
 	log.Println("Already registered Consul services: " + string(respBody))
 	var services = make(map[string]interface{})
 	decoder := json.NewDecoder(strings.NewReader(string(respBody)))
 	if err = decoder.Decode(&services); err != nil {
-		log.Println(err)
-		return registered
+		return nil, err
 	}
 
 	for service := range services {
@@ -324,15 +325,13 @@ func getConsulServices(client *http.Client) []ConsulService {
 		req, _ := http.NewRequest("GET", "http://localhost:8500/v1/catalog/service/"+service, nil)
 		srvResp, err := client.Do(req)
 		if err != nil {
-			log.Println(err)
-			continue
+			return nil, err
 		}
 		respBody, _ := ioutil.ReadAll(srvResp.Body)
 		var services []ConsulService
 		decoder := json.NewDecoder(strings.NewReader(string(respBody)))
 		if err = decoder.Decode(&services); err != nil {
-			log.Println(err)
-			continue
+			return nil, err
 		}
 		log.Printf("Retrieved service info: %v", services)
 		for _, s := range services {
@@ -340,7 +339,7 @@ func getConsulServices(client *http.Client) []ConsulService {
 		}
 	}
 
-	return registered
+	return registered, nil
 }
 
 func getNewComponents(components []HostComponent, consulServices []ConsulService) []HostComponent {
