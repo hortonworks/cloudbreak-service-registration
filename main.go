@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"gopkg.in/natefinch/lumberjack.v2"
 	"gopkg.in/yaml.v2"
-	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -100,6 +100,8 @@ func main() {
 		return
 	}
 
+	setLogFile()
+
 	ambari := createAmbariConfig()
 	httpClient := &http.Client{}
 
@@ -135,14 +137,13 @@ func main() {
 }
 
 func setLogFile() {
-	// TODO log rotation
 	logFilePath := "/var/log/" + App + ".log"
-	logFile, err := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0666)
-	if err != nil {
-		log.Printf("Error opening log file: %v", err)
-	}
-	log.Println("Log file: " + logFilePath)
-	log.SetOutput(io.MultiWriter(os.Stdout, logFile))
+	log.SetOutput(&lumberjack.Logger{
+		Filename:   logFilePath,
+		MaxSize:    10,
+		MaxBackups: 1,
+		MaxAge:     20,
+	})
 }
 
 func wait() {
