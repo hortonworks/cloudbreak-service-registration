@@ -315,7 +315,8 @@ func getHostComponents(client *http.Client, ambari *Ambari, clusterName string, 
 			ip := hosts[item.Host.HostName]
 			for _, component := range item.HostComponents {
 				state := component.HostRole.State
-				if "ON" == component.HostRole.Maintenance {
+				maintenance := component.HostRole.Maintenance
+				if "ON" == maintenance || "IMPLIED_FROM_SERVICE" == maintenance {
 					state = "maintenance"
 				}
 				hc := HostComponent{
