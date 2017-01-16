@@ -65,6 +65,7 @@ type HostComponentsResponse struct {
 				ComponentName string `json:"component_name"`
 				Hostname      string `json:"host_name"`
 				State         string `json:"state"`
+				Maintenance   string `json:"maintenance_state"`
 			} `json:"HostRoles"`
 		} `json:"host_components"`
 	} `json:"items"`
@@ -294,7 +295,7 @@ func getHosts(client *http.Client, ambari *Ambari) (map[string]string, error) {
 }
 
 func getHostComponents(client *http.Client, ambari *Ambari, clusterName string, hosts map[string]string) ([]HostComponent, error) {
-	req := createGETRequest(ambari, "/clusters/"+clusterName+"/hosts?fields=host_components/HostRoles/state/*")
+	req := createGETRequest(ambari, "/clusters/"+clusterName+"/hosts?fields=host_components/HostRoles/state/*,host_components/HostRoles/maintenance_state")
 	var hostComponents = make([]HostComponent, 0)
 	resp, err := client.Do(req)
 	if err != nil {
@@ -312,11 +313,15 @@ func getHostComponents(client *http.Client, ambari *Ambari, clusterName string, 
 		for _, item := range hresp.Items {
 			ip := hosts[item.Host.HostName]
 			for _, component := range item.HostComponents {
+				state := component.HostRole.State
+				if "ON" == component.HostRole.Maintenance {
+					state = "maintenance"
+				}
 				hc := HostComponent{
 					HostComponent: component.HostRole.ComponentName,
 					Hostname:      item.Host.HostName,
 					IP:            ip,
-					State:         component.HostRole.State,
+					State:         state,
 				}
 				hostComponents = append(hostComponents, hc)
 			}
