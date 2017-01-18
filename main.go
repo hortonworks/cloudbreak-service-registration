@@ -20,6 +20,7 @@ const (
 	ENV_SERVICE_CHECK_POLL_INTERVAL     = "SERVICE_CHECK_POLL_INTERVAL"
 	DEFAULT_AMBARI_CREDENTIALS_PATH     = "/srv/pillar/ambari/credentials.sls"
 	DEFAULT_AMBARI_SERVER_PATH          = "/srv/pillar/ambari/server.sls"
+	AMBARI_CONSUL_SERVICE_TAG           = "ambari"
 	DEFAULT_SERVICE_CHECK_POLL_INTERVAL = 10 * time.Second
 	REQUEST_SLEEP_TIME                  = 5 * time.Second
 )
@@ -401,15 +402,17 @@ func getNewComponents(components []HostComponent, consulServices []ConsulService
 func getRemovedServices(components []HostComponent, consulServices []ConsulService) []ConsulService {
 	var removedServices = make([]ConsulService, 0)
 	for _, service := range consulServices {
-		active := false
-		for _, component := range components {
-			if service.ServiceName == strings.ToLower(component.HostComponent) && service.Address == component.IP {
-				active = true
-				break
+		if isAmbariService(service) {
+			active := false
+			for _, component := range components {
+				if service.ServiceName == strings.ToLower(component.HostComponent) && service.Address == component.IP {
+					active = true
+					break
+				}
 			}
-		}
-		if !active {
-			removedServices = append(removedServices, service)
+			if !active {
+				removedServices = append(removedServices, service)
+			}
 		}
 	}
 	return removedServices
@@ -425,7 +428,7 @@ func registerToConsul(client *http.Client, components []HostComponent) {
 			Name:    componentName,
 			Address: comp.IP,
 			Port:    1080,
-			Tags:    []string{strings.ToLower(comp.State)},
+			Tags:    []string{strings.ToLower(comp.State), AMBARI_CONSUL_SERVICE_TAG},
 		}
 		body := service.Json()
 		log.Printf("Registering service: %v", body)
@@ -445,18 +448,25 @@ func registerToConsul(client *http.Client, components []HostComponent) {
 
 func deregisterFromConsul(client *http.Client, services []ConsulService) {
 	for _, service := range services {
-		if service.ServiceName != "consul" && service.ServiceName != "node-exporter" {
-			log.Printf("Deregistering service: %s", service.ServiceID)
-			req, _ := http.NewRequest("GET", "http://"+service.Address+":8500/v1/agent/service/deregister/"+service.ServiceID, nil)
-			resp, err := client.Do(req)
-			if err != nil {
-				log.Println(err)
-				continue
-			}
-			respBody, _ := ioutil.ReadAll(resp.Body)
-			if len(respBody) > 0 {
-				log.Println("Invalid deregister request: " + string(respBody))
-			}
+		log.Printf("Deregistering service: %s", service.ServiceID)
+		req, _ := http.NewRequest("GET", "http://"+service.Address+":8500/v1/agent/service/deregister/"+service.ServiceID, nil)
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		respBody, _ := ioutil.ReadAll(resp.Body)
+		if len(respBody) > 0 {
+			log.Println("Invalid deregister request: " + string(respBody))
 		}
 	}
+}
+
+func isAmbariService(service ConsulService) bool {
+	for _, t := range service.ServiceTags {
+		if t == AMBARI_CONSUL_SERVICE_TAG {
+			return true
+		}
+	}
+	return false
 }
