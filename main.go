@@ -332,7 +332,6 @@ func getHostComponents(client *http.Client, ambari *Ambari, clusterName string, 
 	if err = decoder.Decode(&hresp); err != nil {
 		return nil, err
 	}
-	log.Printf("Found host components: %v", hresp)
 	if len(hresp.Items) > 0 {
 		for _, item := range hresp.Items {
 			ip := hosts[item.Host.HostName]
