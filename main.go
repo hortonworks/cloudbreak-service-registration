@@ -72,6 +72,20 @@ type HostComponentsResponse struct {
 	} `json:"items"`
 }
 
+type RootHostComponentsResponse struct {
+	Items []struct {
+		Components []struct {
+			HostComponents []struct {
+				RootServiceHostComponents struct {
+					Name     string `json:"component_name"`
+					State    string `json:"component_state"`
+					Hostname string `json:"host_name"`
+				} `json:"RootServiceHostComponents"`
+			} `json:"hostComponents"`
+		} `json:"components"`
+	} `json:"items"`
+}
+
 type HostComponent struct {
 	Hostname      string
 	IP            string
@@ -120,6 +134,14 @@ func main() {
 		if err != nil {
 			log.Println("Failed to get the host components from Ambari: " + err.Error())
 			continue
+		}
+		if rootComponents, err := getRootHostComponents(httpClient, ambari, hosts); err != nil {
+			log.Println("Failed to get the root host components from Ambari: " + err.Error())
+			continue
+		} else {
+			for _, component := range rootComponents {
+				components = append(components, component)
+			}
 		}
 		consulServices, err := getConsulServices(httpClient)
 		if err != nil {
@@ -297,8 +319,8 @@ func getHosts(client *http.Client, ambari *Ambari) (map[string]string, error) {
 }
 
 func getHostComponents(client *http.Client, ambari *Ambari, clusterName string, hosts map[string]string) ([]HostComponent, error) {
-	req := createGETRequest(ambari, "/clusters/"+clusterName+"/hosts?fields=host_components/HostRoles/state/*,host_components/HostRoles/maintenance_state")
 	var hostComponents = make([]HostComponent, 0)
+	req := createGETRequest(ambari, "/clusters/"+clusterName+"/hosts?fields=host_components/HostRoles/state/*,host_components/HostRoles/maintenance_state")
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -332,6 +354,41 @@ func getHostComponents(client *http.Client, ambari *Ambari, clusterName string, 
 		log.Printf("Generated host components: %v", hostComponents)
 	} else {
 		log.Println("No host components found yet")
+	}
+	return hostComponents, nil
+}
+
+func getRootHostComponents(client *http.Client, ambari *Ambari, hosts map[string]string) ([]HostComponent, error) {
+	var hostComponents = make([]HostComponent, 0)
+	req := createGETRequest(ambari, "/services/?fields=components/hostComponents/RootServiceHostComponents/service_name,components/hostComponents/RootServiceHostComponents/component_state")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	body, _ := ioutil.ReadAll(resp.Body)
+	log.Println("Root host component resonse: " + string(body))
+	var hresp RootHostComponentsResponse
+	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	if err = decoder.Decode(&hresp); err != nil {
+		return nil, err
+	}
+	if len(hresp.Items) > 0 {
+		for _, item := range hresp.Items {
+			for _, component := range item.Components {
+				for _, hostComponent := range component.HostComponents {
+					hc := HostComponent{
+						HostComponent: hostComponent.RootServiceHostComponents.Name,
+						Hostname:      hostComponent.RootServiceHostComponents.Hostname,
+						IP:            hosts[hostComponent.RootServiceHostComponents.Hostname],
+						State:         hostComponent.RootServiceHostComponents.State,
+					}
+					hostComponents = append(hostComponents, hc)
+				}
+			}
+		}
+		log.Printf("Generated root host components: %v", hostComponents)
+	} else {
+		log.Println("No root host components found yet")
 	}
 	return hostComponents, nil
 }
