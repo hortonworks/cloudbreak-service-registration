@@ -10,9 +10,12 @@ deps:
 	go get github.com/tools/godep
 
 format:
-	@gofmt -w ${GOFILES_NOVENDOR}
+	gofmt -w ${GOFILES_NOVENDOR}
 
-build: format build-darwin build-linux
+vet:
+	go vet -race github.com/sequenceiq/service-registration
+
+build: format vet build-darwin build-linux
 
 build-darwin:
 	GOOS=darwin CGO_ENABLED=0 go build -a -installsuffix cgo ${LDFLAGS} -o build/Darwin/${BINARY} main.go
