@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -408,23 +409,47 @@ func getConsulServices(client *http.Client) ([]ConsulService, error) {
 		return nil, err
 	}
 
+	var wg sync.WaitGroup
+	var errorChannel = make(chan error, len(services))
+	var serviceChannel = make(chan ConsulService)
+
 	for service := range services {
-		log.Println("Get service registrations for: " + service)
-		req, _ := http.NewRequest("GET", "http://localhost:8500/v1/catalog/service/"+service, nil)
-		srvResp, err := client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		respBody, _ := ioutil.ReadAll(srvResp.Body)
-		var services []ConsulService
-		decoder := json.NewDecoder(strings.NewReader(string(respBody)))
-		if err = decoder.Decode(&services); err != nil {
-			return nil, err
-		}
-		log.Printf("Retrieved service info: %v", services)
-		for _, s := range services {
-			registered = append(registered, s)
-		}
+		wg.Add(1)
+		go func(service string) {
+			defer wg.Done()
+			log.Println("Get service registrations for: " + service)
+			req, _ := http.NewRequest("GET", "http://localhost:8500/v1/catalog/service/"+service, nil)
+			srvResp, err := client.Do(req)
+			if err != nil {
+				errorChannel <- err
+				return
+			}
+			respBody, _ := ioutil.ReadAll(srvResp.Body)
+			var services []ConsulService
+			decoder := json.NewDecoder(strings.NewReader(string(respBody)))
+			if err = decoder.Decode(&services); err != nil {
+				errorChannel <- err
+				return
+			}
+			log.Printf("Retrieved service info: %v", services)
+			for _, s := range services {
+				serviceChannel <- s
+			}
+		}(service)
+	}
+
+	go func() {
+		wg.Wait()
+		close(serviceChannel)
+		close(errorChannel)
+	}()
+
+	for s := range serviceChannel {
+		registered = append(registered, s)
+	}
+
+	for e := range errorChannel {
+		return nil, e
 	}
 
 	return registered, nil
@@ -475,31 +500,37 @@ func getRemovedServices(components []HostComponent, consulServices []ConsulServi
 }
 
 func registerToConsul(client *http.Client, components []HostComponent) {
+	var wg sync.WaitGroup
 	for _, comp := range components {
-		componentName := strings.ToLower(comp.HostComponent)
-		shortHostname := comp.Hostname[0:strings.Index(comp.Hostname, ".")]
-		id := strings.Replace(componentName, "_", "-", -1) + "." + strings.Replace(shortHostname, "_", "-", 1)
-		service := ConsulService{
-			ID:      id,
-			Name:    componentName,
-			Address: comp.IP,
-			Port:    1080,
-			Tags:    []string{strings.ToLower(comp.State), AMBARI_CONSUL_SERVICE_TAG},
-		}
-		body := service.Json()
-		log.Printf("Registering service: %v", body)
-		req, _ := http.NewRequest("PUT", "http://"+comp.IP+":8500/v1/agent/service/register", bytes.NewBuffer([]byte(body)))
-		req.Header.Add("Content-Type", "application/json")
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		respBody, _ := ioutil.ReadAll(resp.Body)
-		if len(respBody) > 0 {
-			log.Println("Invalid register request: " + string(respBody))
-		}
+		wg.Add(1)
+		go func(component HostComponent) {
+			defer wg.Done()
+			componentName := strings.ToLower(component.HostComponent)
+			shortHostname := component.Hostname[0:strings.Index(component.Hostname, ".")]
+			id := strings.Replace(componentName, "_", "-", -1) + "." + strings.Replace(shortHostname, "_", "-", 1)
+			service := ConsulService{
+				ID:      id,
+				Name:    componentName,
+				Address: component.IP,
+				Port:    1080,
+				Tags:    []string{strings.ToLower(component.State), AMBARI_CONSUL_SERVICE_TAG},
+			}
+			body := service.Json()
+			log.Printf("Registering service: %v", body)
+			req, _ := http.NewRequest("PUT", "http://"+component.IP+":8500/v1/agent/service/register", bytes.NewBuffer([]byte(body)))
+			req.Header.Add("Content-Type", "application/json")
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			respBody, _ := ioutil.ReadAll(resp.Body)
+			if len(respBody) > 0 {
+				log.Println("Invalid register request: " + string(respBody))
+			}
+		}(comp)
 	}
+	wg.Wait()
 }
 
 func deregisterFromConsul(client *http.Client, services []ConsulService) {
