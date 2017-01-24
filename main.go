@@ -459,7 +459,7 @@ func getNewComponents(components []HostComponent, consulServices []ConsulService
 	var newComponents = make([]HostComponent, 0)
 	for _, component := range components {
 		state := strings.ToLower(component.State)
-		componentName := strings.ToLower(component.HostComponent)
+		componentName := getDnsReadyComponentName(component.HostComponent)
 		if "unknown" != state {
 			registered := false
 			for _, service := range consulServices {
@@ -486,7 +486,7 @@ func getRemovedServices(components []HostComponent, consulServices []ConsulServi
 		if isAmbariService(service) {
 			active := false
 			for _, component := range components {
-				if service.ServiceName == strings.ToLower(component.HostComponent) && service.Address == component.IP {
+				if service.ServiceName == getDnsReadyComponentName(component.HostComponent) && service.Address == component.IP {
 					active = true
 					break
 				}
@@ -505,9 +505,9 @@ func registerToConsul(client *http.Client, components []HostComponent) {
 		wg.Add(1)
 		go func(component HostComponent) {
 			defer wg.Done()
-			componentName := strings.ToLower(component.HostComponent)
+			componentName := getDnsReadyComponentName(component.HostComponent)
 			shortHostname := component.Hostname[0:strings.Index(component.Hostname, ".")]
-			id := strings.Replace(componentName, "_", "-", -1) + "." + strings.Replace(shortHostname, "_", "-", 1)
+			id := componentName + "." + strings.Replace(shortHostname, "_", "-", 1)
 			service := ConsulService{
 				ID:      id,
 				Name:    componentName,
@@ -556,4 +556,8 @@ func isAmbariService(service ConsulService) bool {
 		}
 	}
 	return false
+}
+
+func getDnsReadyComponentName(componentName string) string {
+	return strings.Replace(strings.ToLower(componentName), "_", "-", -1)
 }
