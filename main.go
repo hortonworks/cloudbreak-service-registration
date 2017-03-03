@@ -24,6 +24,7 @@ const (
 	AMBARI_CONSUL_SERVICE_TAG           = "ambari"
 	DEFAULT_SERVICE_CHECK_POLL_INTERVAL = 10 * time.Second
 	REQUEST_SLEEP_TIME                  = 5 * time.Second
+	REQUEST_TIMEOUT                     = DEFAULT_SERVICE_CHECK_POLL_INTERVAL
 )
 
 var (
@@ -119,7 +120,7 @@ func main() {
 	setLogFile()
 
 	ambari := createAmbariConfig()
-	httpClient := &http.Client{}
+	httpClient := &http.Client{Timeout: REQUEST_TIMEOUT}
 
 	clusterName := getClusterName(httpClient, ambari)
 
@@ -535,17 +536,19 @@ func registerToConsul(client *http.Client, components []HostComponent) {
 
 func deregisterFromConsul(client *http.Client, services []ConsulService) {
 	for _, service := range services {
-		log.Printf("Deregistering service: %s", service.ServiceID)
-		req, _ := http.NewRequest("GET", "http://"+service.Address+":8500/v1/agent/service/deregister/"+service.ServiceID, nil)
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		respBody, _ := ioutil.ReadAll(resp.Body)
-		if len(respBody) > 0 {
-			log.Println("Invalid deregister request: " + string(respBody))
-		}
+		go func(service ConsulService) {
+			log.Printf("Deregistering service: %s", service.ServiceID)
+			req, _ := http.NewRequest("GET", "http://"+service.Address+":8500/v1/agent/service/deregister/"+service.ServiceID, nil)
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			respBody, _ := ioutil.ReadAll(resp.Body)
+			if len(respBody) > 0 {
+				log.Println("Invalid deregister request: " + string(respBody))
+			}
+		}(service)
 	}
 }
 
