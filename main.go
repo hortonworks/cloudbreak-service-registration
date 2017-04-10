@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"gopkg.in/natefinch/lumberjack.v2"
 	"gopkg.in/yaml.v2"
@@ -122,21 +123,19 @@ func main() {
 	ambari := createAmbariConfig()
 	httpClient := &http.Client{Timeout: REQUEST_TIMEOUT}
 
-	clusterName := getClusterName(httpClient, ambari)
+	var clusterName string = ""
 
 	for {
 		wait()
+
+		var components = make([]HostComponent, 0)
 
 		hosts, err := getHosts(httpClient, ambari)
 		if err != nil {
 			log.Println("Failed to get the host list from Ambari: " + err.Error())
 			continue
 		}
-		components, err := getHostComponents(httpClient, ambari, clusterName, hosts)
-		if err != nil {
-			log.Println("Failed to get the host components from Ambari: " + err.Error())
-			continue
-		}
+
 		if rootComponents, err := getRootHostComponents(httpClient, ambari, hosts); err != nil {
 			log.Println("Failed to get the root host components from Ambari: " + err.Error())
 			continue
@@ -145,6 +144,25 @@ func main() {
 				components = append(components, component)
 			}
 		}
+
+		clusterFound := true
+		if len(clusterName) == 0 {
+			if clusterName, err = getClusterName(httpClient, ambari); err != nil {
+				log.Println("Cluster name cannot be determined: " + err.Error())
+				clusterFound = false
+			}
+		}
+		if clusterFound {
+			hostComponents, err := getHostComponents(httpClient, ambari, clusterName, hosts)
+			if err != nil {
+				log.Println("Failed to get the host components from Ambari: " + err.Error())
+			} else {
+				for _, component := range hostComponents {
+					components = append(components, component)
+				}
+			}
+		}
+
 		consulServices, err := getConsulServices(httpClient)
 		if err != nil {
 			log.Println("Failed to get the services from consul: " + err.Error())
@@ -265,34 +283,27 @@ func createGETRequest(ambari *Ambari, path string) *http.Request {
 	return req
 }
 
-func getClusterName(client *http.Client, ambari *Ambari) string {
+func getClusterName(client *http.Client, ambari *Ambari) (string, error) {
 	req := createGETRequest(ambari, "/clusters")
-	var clusterName string
-	for len(clusterName) == 0 {
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Println(err)
-			time.Sleep(REQUEST_SLEEP_TIME)
-			continue
-		}
-		body, _ := ioutil.ReadAll(resp.Body)
-		log.Println("Clusters resonse: " + string(body))
-		var cresp ClusterResponse
-		decoder := json.NewDecoder(strings.NewReader(string(body)))
-		if err = decoder.Decode(&cresp); err != nil {
-			log.Println(err)
-			time.Sleep(REQUEST_SLEEP_TIME)
-			continue
-		}
-		if len(cresp.Items) > 0 && len(cresp.Items[0].Cluster.Name) > 0 {
-			clusterName = cresp.Items[0].Cluster.Name
-			log.Println("Found cluster: " + clusterName)
-		} else {
-			log.Println("Cluster not found, yet, waiting..")
-			time.Sleep(REQUEST_SLEEP_TIME)
-		}
+	var clusterName string = ""
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
 	}
-	return clusterName
+	body, _ := ioutil.ReadAll(resp.Body)
+	log.Println("Clusters resonse: " + string(body))
+	var cresp ClusterResponse
+	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	if err = decoder.Decode(&cresp); err != nil {
+		return "", err
+	}
+	if len(cresp.Items) > 0 && len(cresp.Items[0].Cluster.Name) > 0 {
+		clusterName = cresp.Items[0].Cluster.Name
+		log.Println("Found cluster: " + clusterName)
+	} else {
+		return "", errors.New("Cluster not found, yet")
+	}
+	return clusterName, nil
 }
 
 func getHosts(client *http.Client, ambari *Ambari) (map[string]string, error) {
