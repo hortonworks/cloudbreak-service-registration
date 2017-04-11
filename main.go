@@ -18,10 +18,10 @@ import (
 
 const (
 	ENV_AMBARI_CREDENTIALS_PATH         = "AMBARI_CREDENTIALS_PATH"
-	ENV_AMBARI_SERVER_PATH              = "AMBARI_SERVER_PATH"
 	ENV_SERVICE_CHECK_POLL_INTERVAL     = "SERVICE_CHECK_POLL_INTERVAL"
+	ENV_AMBARI_ADDRESS                  = "AMBARI_ADDRESS"
+	DEFAULT_AMBARI_ADDRESS              = "ambari-server"
 	DEFAULT_AMBARI_CREDENTIALS_PATH     = "/srv/pillar/ambari/credentials.sls"
-	DEFAULT_AMBARI_SERVER_PATH          = "/srv/pillar/ambari/server.sls"
 	AMBARI_CONSUL_SERVICE_TAG           = "ambari"
 	DEFAULT_SERVICE_CHECK_POLL_INTERVAL = 10 * time.Second
 	REQUEST_SLEEP_TIME                  = 5 * time.Second
@@ -211,13 +211,11 @@ func createAmbariConfig() *Ambari {
 	waitFile(credentialsPath)
 	ambari := readCredentials(credentialsPath)
 
-	serverPath := os.Getenv(ENV_AMBARI_SERVER_PATH)
-	if len(serverPath) == 0 {
-		serverPath = DEFAULT_AMBARI_SERVER_PATH
+	ambariAddress := os.Getenv(ENV_AMBARI_ADDRESS)
+	if len(ambariAddress) == 0 {
+		ambariAddress = DEFAULT_AMBARI_ADDRESS
 	}
-	log.Print("Ambari server path: " + serverPath)
-	waitFile(serverPath)
-	ambari.Config.Address = readServer(serverPath).Config.Address
+	ambari.Config.Address = ambariAddress
 	return ambari
 }
 

@@ -1,6 +1,6 @@
 BINARY=service-registration
 
-VERSION=0.7
+VERSION=0.8
 BUILD_TIME=$(shell date +%FT%T)
 LDFLAGS=-ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.App=${BINARY}"
 GOFILES_NOVENDOR = $(shell find . -type f -name '*.go' -not -path "./vendor/*")
