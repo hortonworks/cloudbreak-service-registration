@@ -13,7 +13,7 @@ format:
 	gofmt -w ${GOFILES_NOVENDOR}
 
 vet:
-	go vet -race github.com/sequenceiq/service-registration
+	go vet -race github.com/hortonworks/service-registration
 
 build: format vet build-darwin build-linux
 
